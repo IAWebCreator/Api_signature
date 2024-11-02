@@ -71,11 +71,11 @@ def add_signature():
             return jsonify({"error": "'CONTRATISTA' not found in the PDF."}), 404
 
         # Define the position and size
-        insert_position = fitz.Point(last_coord.x0, last_coord.y1 + 10)
+        insert_position = fitz.Point(last_coord.x0, last_coord.y1 + 5)
         
-        # Define the size of the signature
-        sig_width = signature_image.width
-        sig_height = signature_image.height
+        # Define the size of the signature (reduced by 25%)
+        sig_width = int(signature_image.width * 0.75)  # Reduce width by 25%
+        sig_height = int(signature_image.height * 0.75)  # Reduce height by 25%
 
         # Validate that the insertion point is within page bounds
         page = pdf_document[last_page]
