@@ -23,12 +23,19 @@ def get_signature_from_env():
         if len(signature_bytes) == 0:
             raise ValueError("Empty signature data")
             
-        # Create a temporary buffer for the signature
-        signature_buffer = io.BytesIO(signature_bytes)
-        return signature_buffer
+        # Open the image as a document
+        img_doc = fitz.open(stream=signature_bytes, filetype="jpeg")  # Use "jpeg" if your image is in JPEG format
         
-    except base64.binascii.Error:
-        raise ValueError("Invalid base64 signature data")
+        # Load the first (and only) page
+        img_page = img_doc.load_page(0)
+        
+        # Extract the pixmap (image)
+        signature_image = img_page.get_pixmap()
+        
+        return signature_image
+        
+    except Exception as e:
+        raise ValueError(f"Invalid signature data: {str(e)}")
 
 @app.route('/add_signature', methods=['POST'])
 def add_signature():
@@ -38,23 +45,16 @@ def add_signature():
     pdf_file = request.files['pdf']
 
     try:
-        # Get signature from environment variable
-        signature_buffer = get_signature_from_env()
+        # Get signature image from environment variable
+        signature_image = get_signature_from_env()
+
+        # Validate signature image dimensions
+        if signature_image.width <= 0 or signature_image.height <= 0:
+            return jsonify({"error": "Invalid signature image dimensions"}), 400
 
         # Load the PDF
         pdf_bytes = pdf_file.read()
         pdf_document = fitz.open(stream=pdf_bytes, filetype="pdf")
-
-        try:
-            # Load and validate the signature image
-            signature_image = fitz.Pixmap(fitz.csRGB, signature_buffer.getvalue())
-            
-            # Validate signature image dimensions
-            if signature_image.width <= 0 or signature_image.height <= 0:
-                return jsonify({"error": "Invalid signature image dimensions"}), 400
-            
-        except Exception as img_error:
-            return jsonify({"error": f"Error loading signature image: {str(img_error)}"}), 400
 
         # Find the last occurrence of "CONTRATISTA"
         last_coord = None
@@ -70,12 +70,12 @@ def add_signature():
         if last_coord is None:
             return jsonify({"error": "'CONTRATISTA' not found in the PDF."}), 404
 
-        # Define the position and size with validation
+        # Define the position and size
         insert_position = fitz.Point(last_coord.x0, last_coord.y1 + 20)
         
-        # Adjust signature size with minimum values
-        sig_width = max(100, signature_image.width)  # minimum 100 pixels
-        sig_height = max(50, signature_image.height)  # minimum 50 pixels
+        # Define the size of the signature
+        sig_width = signature_image.width
+        sig_height = signature_image.height
 
         # Validate that the insertion point is within page bounds
         page = pdf_document[last_page]
@@ -85,20 +85,17 @@ def add_signature():
             insert_position.y + sig_height > page_rect.height):
             return jsonify({"error": "Signature position would be outside page bounds"}), 400
 
-        # Insert the signature image with error handling
-        try:
-            page.insert_image(
-                fitz.Rect(
-                    insert_position.x, 
-                    insert_position.y, 
-                    insert_position.x + sig_width, 
-                    insert_position.y + sig_height
-                ),
-                pixmap=signature_image,
-                keep_proportion=True
-            )
-        except Exception as insert_error:
-            return jsonify({"error": f"Error inserting signature: {str(insert_error)}"}), 400
+        # Insert the signature image
+        page.insert_image(
+            fitz.Rect(
+                insert_position.x, 
+                insert_position.y, 
+                insert_position.x + sig_width, 
+                insert_position.y + sig_height
+            ),
+            pixmap=signature_image,
+            keep_proportion=True
+        )
 
         # Save the modified PDF to a bytes buffer
         output_buffer = io.BytesIO()
@@ -122,15 +119,14 @@ def add_signature():
 @app.route('/test_signature', methods=['GET'])
 def test_signature():
     try:
-        signature_buffer = get_signature_from_env()
-        signature_image = fitz.Pixmap(fitz.csRGB, signature_buffer.getvalue())
+        signature_image = get_signature_from_env()
         
         return jsonify({
             "status": "success",
             "signature_info": {
                 "width": signature_image.width,
                 "height": signature_image.height,
-                "size_bytes": len(signature_buffer.getvalue())
+                "size_bytes": len(signature_image.get_image())
             }
         })
     except Exception as e:
